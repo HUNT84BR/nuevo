@@ -1,0 +1,299 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// Nomencladores
+model Family {
+  id        Int       @id @default(autoincrement())
+  code      String    @unique
+  name      String
+  isActive  Boolean   @default(true)
+  products  Product[]
+  createdAt DateTime  @default(now())
+}
+
+model Partner {
+  id         Int             @id @default(autoincrement())
+  type       String          // CLIENT, SUPPLIER, CONTRACTOR
+  taxId      String?
+  name       String
+  contactInfo String?
+  isActive   Boolean         @default(true)
+  projects   Project[]       @relation("ClientProjects")
+  contractorProjects Project[] @relation("ContractorProjects")
+  purchaseOrders PurchaseOrder[]
+  createdAt  DateTime        @default(now())
+
+  @@map("partners")
+}
+
+// Catálogo de Productos
+model Product {
+  id           Int                 @id @default(autoincrement())
+  sku          String              @unique
+  name         String
+  familyId     Int?
+  family       Family?             @relation(fields: [familyId], references: [id])
+  minStock     Decimal             @default("0")
+  currentStock Decimal             @default("0")
+  unitCostAvg  Decimal             @default("0")
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  
+  projectMaterials   ProjectMaterial[]
+  poLines            PurchaseOrderLine[]
+  inventoryMovements InventoryMovement[]
+  templateItems      TemplateItem[]
+
+  @@index([sku])
+  @@index([familyId])
+}
+
+// Estructura Física
+model Warehouse {
+  id        Int        @id @default(autoincrement())
+  code      String     @unique
+  name      String
+  type      String     // MAIN, PROJECT, RECEPTION
+  isVirtual Boolean    @default(false)
+  locations Location[]
+  createdAt DateTime   @default(now())
+}
+
+model Location {
+  id          Int       @id @default(autoincrement())
+  warehouseId Int
+  rackCode    String
+  shelfCode   String
+  binCode     String
+  fullPath    String    @unique // e.g., A-R02-S04-B3
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  
+  warehouse   Warehouse  @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  receiptLines ReceiptLine[]
+  movementsSrc InventoryMovement[] @relation("SourceLocation")
+  movementsDest InventoryMovement[] @relation("DestLocation")
+
+  @@index([warehouseId])
+  @@index([fullPath])
+  @@map("locations")
+}
+
+// Gestión de Proyectos
+model Project {
+  id          Int             @id @default(autoincrement())
+  code        String          @unique
+  name        String
+  clientId    Int
+  contractorId Int?
+  startDate   DateTime?
+  endDate     DateTime?
+  budget      Decimal         @default("0")
+  status      String          // PLANNING, ASSIGNMENT, IN_PROGRESS, PAUSED, COMPLETED, CLOSED, CANCELLED
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  
+  client      Partner         @relation("ClientProjects", fields: [clientId], references: [id])
+  contractor  Partner?        @relation("ContractorProjects", fields: [contractorId], references: [id])
+  materials   ProjectMaterial[]
+  purchaseOrders PurchaseOrder[]
+  calendarEvents CalendarEvent[]
+  
+  @@index([status])
+  @@index([clientId])
+}
+
+model ProjectMaterial {
+  id               Int     @id @default(autoincrement())
+  projectId        Int
+  productId        Int
+  quantityRequired Decimal
+  quantityReserved Decimal @default("0")
+  quantityDispatched Decimal @default("0")
+  sourceType       String  // STOCK, PURCHASE_ORDER
+  sourceRefId      Int?
+  createdAt        DateTime @default(now())
+  
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id])
+  
+  @@index([projectId])
+  @@index([productId])
+  @@map("project_materials")
+}
+
+// Plantillas de Materiales
+model MaterialTemplate {
+  id          Int            @id @default(autoincrement())
+  name        String
+  version     Int            @default(1)
+  isScalable  Boolean        @default(false)
+  unitFactor  Decimal        @default("1")
+  createdAt   DateTime       @default(now())
+  
+  items       TemplateItem[]
+  
+  @@index([name])
+  @@map("material_templates")
+}
+
+model TemplateItem {
+  id           Int              @id @default(autoincrement())
+  templateId   Int
+  productId    Int
+  quantityBase Decimal
+  
+  template     MaterialTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  product      Product          @relation(fields: [productId], references: [id])
+  
+  @@index([templateId])
+  @@map("template_items")
+}
+
+// Compras
+model PurchaseOrder {
+  id          Int              @id @default(autoincrement())
+  poNumber    String           @unique
+  supplierId  Int
+  projectId   Int?
+  type        String           // GLOBAL, PROJECT
+  status      String           // REQUESTED, PROCESSING, COMPLETED, CANCELLED
+  totalAmount Decimal          @default("0")
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  
+  supplier    Partner          @relation(fields: [supplierId], references: [id])
+  project     Project?         @relation(fields: [projectId], references: [id])
+  lines       PurchaseOrderLine[]
+  receiptBatches ReceiptBatch[]
+  
+  @@index([poNumber])
+  @@index([status])
+  @@index([supplierId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id                Int              @id @default(autoincrement())
+  poId              Int
+  productId         Int
+  quantityOrdered   Decimal
+  quantityReceived  Decimal          @default("0")
+  quantityCancelled Decimal          @default("0")
+  unitPrice         Decimal
+  
+  po                PurchaseOrder    @relation(fields: [poId], references: [id], onDelete: Cascade)
+  product           Product          @relation(fields: [productId], references: [id])
+  receiptLines      ReceiptLine[]
+  
+  @@unique([poId, productId])
+  @@index([poId])
+  @@map("po_lines")
+}
+
+// Recepción
+model ReceiptBatch {
+  id           Int           @id @default(autoincrement())
+  batchNumber  String        @unique
+  poId         Int
+  receivedAt   DateTime      @default(now())
+  isValidated  Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  
+  po           PurchaseOrder @relation(fields: [poId], references: [id])
+  lines        ReceiptLine[]
+  
+  @@index([batchNumber])
+  @@index([poId])
+  @@map("receipt_batches")
+}
+
+model ReceiptLine {
+  id           Int            @id @default(autoincrement())
+  batchId      Int
+  poLineId     Int?
+  productId    Int
+  quantityPhysical Decimal
+  locationId   Int?
+  
+  batch        ReceiptBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  poLine       PurchaseOrderLine? @relation(fields: [poLineId], references: [id])
+  product      Product        @relation(fields: [productId], references: [id])
+  location     Location?      @relation(fields: [locationId], references: [id])
+  
+  @@index([batchId])
+  @@map("receipt_lines")
+}
+
+// Ledger de Inventarios
+model InventoryMovement {
+  id              Int       @id @default(autoincrement())
+  timestamp       DateTime  @default(now())
+  productId       Int
+  quantity        Decimal   // Positivo: entrada, Negativo: salida
+  movementType    String    // PURCHASE_IN, SALE_OUT, TRANSFER_IN, TRANSFER_OUT, RETURN_IN, ADJUSTMENT, OPENING_STOCK, PROJECT_OUT
+  referenceType   String?   // PO, PROJECT, TRANSFER
+  referenceId     Int?
+  sourceLocationId Int?
+  destLocationId  Int?
+  batchId         Int?
+  serialNumber    String?
+  reasonCode      String?   // DAMAGED, SURPLUS, SCOPE_CHANGE
+  
+  product         Product   @relation(fields: [productId], references: [id])
+  sourceLocation  Location? @relation("SourceLocation", fields: [sourceLocationId], references: [id])
+  destLocation    Location? @relation("DestLocation", fields: [destLocationId], references: [id])
+  
+  @@index([productId])
+  @@index([timestamp])
+  @@index([movementType])
+  @@map("inventory_movements")
+}
+
+// Calendario
+model CalendarEvent {
+  id              Int       @id @default(autoincrement())
+  title           String
+  description     String?
+  startDatetime   DateTime
+  endDatetime     DateTime?
+  colorCode       String?   // HEX color
+  relatedType     String?   // PROJECT, TASK, MAINTENANCE
+  relatedId       Int?
+  ownerId         Int?
+  reminderMinutes Int?      @default(60)
+  icalUid         String    @unique @default(cuid())
+  createdAt       DateTime  @default(now())
+  
+  project         Project?  @relation(fields: [relatedId], references: [id])
+  
+  @@index([startDatetime])
+  @@index([relatedType, relatedId])
+  @@map("calendar_events")
+}
+
+// Documentos Adjuntos
+model Attachment {
+  id          Int       @id @default(autoincrement())
+  entityType  String    // PROJECT, PURCHASE_ORDER, etc.
+  entityId    Int
+  fileName    String
+  filePath    String
+  mimeType    String
+  sizeBytes   Int
+  version     Int       @default(1)
+  ocrText     String?
+  uploadedAt  DateTime  @default(now())
+  
+  @@index([entityType, entityId])
+  @@map("attachments")
+}
